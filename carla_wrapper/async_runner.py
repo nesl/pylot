@@ -11,7 +11,7 @@ from utils.simulation import get_world
 
 from simulation import CarlaSimulation
 from visualizer import Visualizer
-from detection.object_detection import ObjectDetector
+#from detection.object_detection import ObjectDetector
 from perception.object_tracking import ObjectTracker
 from perception.location_history import ObstacleLocationHistory
 from objects.messages import ObstacleTrajectoriesMessage
@@ -32,7 +32,7 @@ class AsyncSimulationRunner():
                              params.simulator_timeout)
         self._simulation = CarlaSimulation(client, world)
         self._visualizer = Visualizer(world)
-        self._detector = ObjectDetector()
+        #self._detector = ObjectDetector()
         self._tracker = ObjectTracker()
         self._history = ObstacleLocationHistory()
         self._controller = Controller()
@@ -159,7 +159,7 @@ class AsyncSimulationRunner():
                 rx_time = time.time()
                 print("Time taken for sense-effect "+str(time.time()-send_time))
                 control_msg = pickle.loads(control_msg)
-                print("Control message rx time: ", rx_time-control_msg.local_send_time)   
+                #print("Control message rx time: ", rx_time-control_msg.local_send_time)   
                 with self._control_lock:
                     self._throttle = control_msg.throttle
                     self._brake = control_msg.brake

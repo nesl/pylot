@@ -2,6 +2,7 @@ import time
 import params
 import socket
 import pickle
+import csv
 
 from utils.logging import setup_pipeline_logging, ModuleCompletionLogger
 from utils.simulation import get_world
@@ -40,6 +41,10 @@ class SimulationRunner():
         self.brake = -1
         self.steer = -1
 
+        self.csvfile = open('planner_dump.csv', 'w', newline='')
+        self.csvwriter = csv.writer(self.csvfile)
+        self.csvwriter.writerow(['timestamp', 'pose', 'waypoints'])
+
     def run_one_tick(self):
         (timestamp, frame, depth_frame, pose) = self._simulation.tick_simulator()
         if not frame:
@@ -71,7 +76,8 @@ class SimulationRunner():
             print(pose)
             (waypoints, planner_runtime) = self._planner.get_waypoints(timestamp, pose, obstacle_predictions)
             print("Planner waypoints  {} {}".format(len(waypoints.waypoints), planner_runtime))
-            
+            self.csvwriter.writerow([timestamp, pose, waypoints.waypoints])
+        
         (steer, throttle, brake, controller_runtime) = self._controller.get_control_instructions(timestamp, pose, waypoints)
         print("Control instructions {} {} {} {}".format(throttle, steer, brake, controller_runtime))
 

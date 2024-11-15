@@ -70,6 +70,7 @@ class MPCRunner():
 
     def run_MPC(self, timestamp, pose, waypoints):
         start_time = time.time()
+        #print(waypoints.waypoints)
         (steer, throttle, brake, controller_runtime) = self._controller.get_control_instructions(timestamp, pose, waypoints)
         end_time = time.time()
         print("\nControl instructions {} {} {} {}".format(throttle, steer, brake, controller_runtime))

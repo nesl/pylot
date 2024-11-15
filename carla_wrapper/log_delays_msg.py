@@ -35,8 +35,8 @@ def recvall(sock, n):
     return data
 
 def connect_to_server():
-    host = '3.101.22.206'
-    port = 5020
+    host = '50.18.72.199'
+    port = 10000
 
     cloud_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     cloud_conn.connect((host, port))
