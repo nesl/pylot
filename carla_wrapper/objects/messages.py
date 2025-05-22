@@ -382,6 +382,7 @@ class SensorMessage():
         self.local_send_time = local_send_time
 
 class PlannerMessage():
-    def __init__(self, pose, waypoints):
+    def __init__(self, pose, waypoints, timestamp):
         self.pose = pose
         self.waypoints = waypoints
+        self.timestamp = timestamp

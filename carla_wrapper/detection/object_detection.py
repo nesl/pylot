@@ -4,8 +4,8 @@ import numpy as np
 import os
 import logging
 import utils.logging
-
-import tensorflow as tf
+import torch
+#import tensorflow as tf
 
 from objects.objects import BoundingBox2D, Obstacle, VEHICLE_LABELS
 from objects.messages import ObstaclesMessage
@@ -28,26 +28,31 @@ class ObjectDetector:
         print("\nInitializing Object Detector ... ")
         self._module_logger.info("\nInitializing Object Detector")
         
-        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-        logging.getLogger('tensorflow').setLevel(logging.ERROR)
+        #os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+        #logging.getLogger('tensorflow').setLevel(logging.ERROR)
         
         # Only sets memory growth for flagged GPU
-        physical_devices = tf.config.experimental.list_physical_devices('GPU')
-        tf.config.experimental.set_visible_devices([physical_devices[obstacle_detection_gpu_index]], 'GPU')
-        tf.config.experimental.set_memory_growth(physical_devices[obstacle_detection_gpu_index], True)
+        #physical_devices = tf.config.experimental.list_physical_devices('GPU')
+        #tf.config.experimental.set_visible_devices([physical_devices[obstacle_detection_gpu_index]], 'GPU')
+        #tf.config.experimental.set_memory_growth(physical_devices[obstacle_detection_gpu_index], True)
 
         # Load the model from the saved_model format file.
-        self._tf_model = tf.saved_model.load(obstacle_detection_model_paths)
+        #self._tf_model = tf.saved_model.load(obstacle_detection_model_paths)
 
         self._coco_labels = load_coco_labels(path_coco_labels)
         self._bbox_colors = load_coco_bbox_colors(self._coco_labels)
 
         # Serve some junk image to load up the model.
-        self._run_tf_model(np.zeros((108, 192, 3), dtype='uint8'))
+        #self._run_tf_model(np.zeros((108, 192, 3), dtype='uint8'))
 
         if params.detector_type == 'yolo':
+            torch.cuda.set_device(0)
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            print(device)
             from ultralytics import YOLO
-            self._model = YOLO('yolov8m.pt', task='detect')
+            self._model = YOLO('yolov8x.pt', task='detect')
+            for i in range(10):
+                self._model.predict('traffic-jam-getty.jpg', device=0)
 
         # Unique bounding box id. Incremented for each bounding box.
         self._unique_id = 0
@@ -77,7 +82,7 @@ class ObjectDetector:
             source=frame[:,:,::-1],
             conf=0.1, #obstacle_detection_min_score_threshold,
             imgsz=[params.camera_image_height, params.camera_image_width],
-            device=params.device,
+            device=0,
             classes=[1,2,3,5,6,7])
 
         obstacles = []

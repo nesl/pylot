@@ -30,3 +30,11 @@ def steer_to_radians(steer: float, steer_gain: float):
     else:
         rad = max(rad, -np.pi / 2)
     return rad
+
+def as_numpy_array_2D(self):
+    wx = []
+    wy = []
+    for wp in self.waypoints:
+        wx.append(wp.location.x)
+        wy.append(wp.location.y)
+    return np.array([wx, wy])

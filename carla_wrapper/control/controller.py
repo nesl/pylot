@@ -6,6 +6,8 @@ import numpy as np
 
 import cvxpy
 from cvxpy.expressions import constants
+import osqp
+from scipy import sparse
 
 from control import control_utils
 from control.mpc_utils import Trajectory, Vehicle, compute_curvature
@@ -25,7 +27,7 @@ class Controller():
         self._csv_logger = ModuleCompletionLogger()
         self._timestamp_logger = get_timestamp_logger()
         
-        print("\nInitializing Controller...")
+        # print("\nInitializing Controller...")
         self._mpc_config = global_config
         self._pid = PIDLongitudinalController(1.0, 0.0, 0.05, dt = 1.0 / params.simulator_fps)
         self._mps = None
@@ -34,7 +36,7 @@ class Controller():
     def get_control_instructions(self, timestamp, pose, waypoints):
         self.last_timestamp = timestamp
         start_time = time.time()
-        ego = pose.transform
+        ego = pose.transform    # Position and Orientation of vehicle (Transform Object)
         speed = pose.forward_speed
 
         if waypoints == None or len(waypoints.waypoints) < 3:
@@ -45,7 +47,7 @@ class Controller():
             if params.controller_type == "pid":
                 steer, throttle, brake = self.get_pid_control_instructions(ego, speed, waypoints)
             else:
-                steer, throttle, brake = self.get_mpc_control_instructions(ego, speed, waypoints)
+                steer, throttle, brake = self.get_mpc_control_instructions(ego, speed, waypoints) # This is called
         except ValueError:
             print('Braking! No more waypoints to follow.')
             throttle, brake = 0.0, 0.5
@@ -68,6 +70,12 @@ class Controller():
         return steer, throttle, brake
 
     def get_mpc_control_instructions(self, vehicle, speed, waypoints):
+        '''
+        Args:
+            vehicle (Transform)     - Position and orientation of vehicle
+            speef                   - speed of vehicle
+            waypoints (Waypoints)   - set of waypoints with target speeds
+        '''
         target_speeds = waypoints.target_speeds
 
         self.setup_mpc(waypoints, target_speeds)
@@ -86,7 +94,7 @@ class Controller():
         target_steer_rad = self._mpc.horizon_steer[0]  # in rad
         steer = control_utils.radians_to_steer(target_steer_rad, params.steer_gain)
         throttle, brake = self.compute_throttle_and_brake(
-            self._pid, speed, target_speed)
+            self._pid, speed, target_speed)         # Get throttle/brake inputs from target speed using a PID controller
         return steer, throttle, brake
     
     def setup_mpc(self, waypoints, target_speeds):
@@ -298,8 +306,8 @@ class ModelPredictiveController:
             [self.reference.x_list[-1], self.reference.y_list[-1]])
         self.delta_t = 0.1  # [s]
         self.delta_s = self.reference.s_list[1] - self.reference.s_list[0]
-        self.horizon_accel = np.zeros((self.config['horizon'], 1))  # [m/s2]
-        self.horizon_steer = np.zeros((self.config['horizon'], 1))  # [rad]
+        self.horizon_accel = np.zeros((self.config['horizon']))  # [m/s2]
+        self.horizon_steer = np.zeros((self.config['horizon']))  # [rad]
 
     def step(self):
         """
@@ -312,7 +320,7 @@ class ModelPredictiveController:
         # Solve control for the next step
         self._update_path_index()
         reference_state, reference_steer = \
-            self._retrieve_imminent_reference()
+            self._retrieve_imminent_reference() # Gets next set of states along path upto horizon
 
         for _ in range(self.config['max_iteration']):
             is_converged = self._iterative_control(reference_state,
@@ -451,79 +459,197 @@ class ModelPredictiveController:
         return state
 
     def _control(self, reference_state, predicted_state, reference_steer):
-        """
-        Solve the MPC control problem.
 
-        :param reference_state: np.array of reference states
-        :param predicted_state: np.array of predicted states obtained using
-            propogated controls
-        :param reference_steer: np.array of reference steering
-        :return:
-        """
-        # intialize problem
-        x = cvxpy.Variable((self.num_state, self.config['horizon'] + 1))
-        u = cvxpy.Variable((self.num_input, self.config['horizon']))
-        cost = constants.Constant(0.0)
-        constraints = []
+        nx = self.num_state
+        nu = self.num_input
+        N = self.config['horizon']
 
-        # iterate over the horizon
-        for t in range(self.config['horizon']):
-            cost += cvxpy.quad_form(u[:, t], self.config['R'])
+        P = np.zeros((nx*(N+1)+nu*N, nx*(N+1)+nu*N))
+        q = np.zeros(nx*(N+1)+nu*N)
 
-            if t != 0:
-                cost += cvxpy.quad_form(reference_state[:, t] - x[:, t],
-                                        self.config['Q'])
+        x_coeff = np.zeros((nx*(N+1), nx*(N+1)))
+        u_coeff = np.zeros((nx*(N+1), nu*N))
+        eq_val = np.zeros(nx*(N+1))
 
-            matrix_a, matrix_b, matrix_c = self._linearized_model_matrix(
-                predicted_state[2, t], predicted_state[3, t],
-                reference_steer[0, t])
-            constraints += [
-                x[:,
-                  t + 1] == matrix_a @ x[:, t] + matrix_b @ u[:, t] + matrix_c
-            ]
+        steer_speed_coeff = np.zeros((N-1, nu*N))
+        steer_val_coeff = np.zeros((N, nu*N))
+        accel_val_coeff = np.zeros((N, nu*N))
+        vel_coeff = np.zeros((N, nx*(N+1)))
 
-            if t < (self.config['horizon'] - 1):
-                cost += cvxpy.quad_form(u[:, t + 1] - u[:, t],
-                                        self.config['Rd'])
-                constraints += [
-                    cvxpy.abs(u[1, t + 1] - u[1, t]) <=
-                    self.vehicle.config['max_steer_speed'] * self.delta_t
-                ]
+        Px = P[:nx*(N+1), :nx*(N+1)]
+        Pu = P[-nu*N:, -nu*N:]
+        qx = q[:nx*(N+1)]
 
-        # set the cost
-        cost += cvxpy.quad_form(
-            reference_state[:, self.config['horizon']] -
-            x[:, self.config['horizon']], self.config['Qf'])
+        x_coeff[:nx, :nx] = np.eye(nx)
+        eq_val[:nx] = self.vehicle.get_state()
 
-        # set the constraints
-        constraints += [x[:, 0] == self.vehicle.get_state()]
-        constraints += [x[2, :] <= self.vehicle.config['max_vel']]
-        constraints += [x[2, :] >= self.vehicle.config['min_vel']]
-        constraints += [u[0, :] <= self.vehicle.config['max_accel']]
-        constraints += [u[0, :] >= self.vehicle.config['min_accel']]
-        constraints += [u[1, :] <= self.vehicle.config['max_steer']]
-        constraints += [u[1, :] >= self.vehicle.config['min_steer']]
+        for t in range(N):
+            if t!=0:
+                # Rd - cost for high change in input
+                Pu[(t-1)*nu:t*nu, (t-1)*nu:t*nu] += self.config['Rd']
+                Pu[t*nu:(t+1)*nu, (t-1)*nu:t*nu] -= self.config['Rd']
+                Pu[(t-1)*nu:t*nu, t*nu:(t+1)*nu] -= self.config['Rd']
+                Pu[t*nu:(t+1)*nu, t*nu:(t+1)*nu] += self.config['Rd']
 
-        # solve the problem
-        prob = cvxpy.Problem(cvxpy.Minimize(cost), constraints)
-        prob.solve(solver=cvxpy.OSQP, verbose=False, warm_start=True)
+                # Q - cost for error in tracking reference
+                Px[t*nx:(t+1)*nx, t*nx:(t+1)*nx] = self.config['Q']                
+                qx[t*nx:(t+1)*nx] = -self.config['Q']@reference_state[:,t]
 
-        # keep track of optimality
-        solved = False
-        if prob.status == cvxpy.OPTIMAL or \
-                prob.status == cvxpy.OPTIMAL_INACCURATE:
-            solved = True
+                # Steering speed (rate of change) constraint
+                steer_speed_coeff[t-1, t*nu+1] = 1
+                steer_speed_coeff[t-1, (t-1)*nu+1] = -1
+            
+            # Dynamic constraints x(t+1) = A x(t) + B u(t) + C
+            matrix_a, matrix_b, matrix_c = self._linearized_model_matrix(predicted_state[2, t], predicted_state[3, t], reference_steer[0, t])
+            x_coeff[(t+1)*nx:(t+2)*nx, t*nx:(t+1)*nx] = - matrix_a
+            x_coeff[(t+1)*nx:(t+2)*nx, (t+1)*nx:(t+2)*nx] = np.eye(nx)
+            u_coeff[(t+1)*nx:(t+2)*nx, t*nu:(t+1)*nu] = - matrix_b
+            eq_val[(t+1)*nx:(t+2)*nx] = matrix_c
 
-        # return solution
-        horizon_x = np.array(x.value[0, :]).flatten()
-        horizon_y = np.array(x.value[1, :]).flatten()
-        horizon_vel = np.array(x.value[2, :]).flatten()
-        horizon_yaw = np.array(x.value[3, :]).flatten()
-        horizon_accel = np.array(u.value[0, :]).flatten()
-        horizon_steer = np.array(u.value[1, :]).flatten()
+            # R - Input magnitude cost
+            Pu[t*nu:(t+1)*nu, t*nu:(t+1)*nu] += self.config['R']
 
-        return horizon_x, horizon_y, horizon_vel, horizon_yaw, horizon_accel, \
-            horizon_steer, solved
+            # Steering value constraint
+            steer_val_coeff[t, t*nu+1] = 1
+            
+            # Acceleration value constraint
+            accel_val_coeff[t, t*nu] = 1
+
+            # Velocity constraint
+            vel_coeff[t, (t+1)*nx+2] = 1
+        
+        # Qf - Final state error cost
+        Px[-nx:, -nx:] = self.config['Qf']        
+        qx[-nx:] = -self.config['Qf']@reference_state[:,-1]
+
+        # Padding inequality constraints with 0s
+        steer_speed_coeff = np.hstack([np.zeros((N-1, nx*(N+1))), steer_speed_coeff])
+        steer_val_coeff = np.hstack([np.zeros((N, nx*(N+1))), steer_val_coeff])
+        accel_val_coeff = np.hstack([np.zeros((N, nx*(N+1))), accel_val_coeff])
+        vel_coeff = np.hstack([vel_coeff, np.zeros((N, nu*N))])
+
+        # Combining inequality constraints
+        A_ineq = np.vstack([
+            steer_speed_coeff,
+            steer_val_coeff,
+            accel_val_coeff,
+            vel_coeff
+            ])
+        u_ineq = np.hstack([
+            self.vehicle.config['max_steer_speed'] * self.delta_t * np.ones(N-1),
+            self.vehicle.config['max_steer'] * np.ones(N),
+            self.vehicle.config['max_accel'] * np.ones(N),
+            self.vehicle.config['max_vel'] * np.ones(N)
+        ])
+        l_ineq = np.hstack([
+            -self.vehicle.config['max_steer_speed'] * self.delta_t * np.ones(N-1),
+            self.vehicle.config['min_steer'] * np.ones(N),
+            self.vehicle.config['min_accel'] * np.ones(N),
+            self.vehicle.config['min_vel'] * np.ones(N)
+        ])
+
+        # Combining equality constraints
+        A_eq = np.hstack([x_coeff, u_coeff])
+        u_eq = eq_val
+        l_eq = eq_val
+
+        # Combining all constraints
+        A = np.vstack([A_eq, A_ineq])
+        u = np.hstack([u_eq, u_ineq])
+        l = np.hstack([l_eq, l_ineq])
+
+        optimizer = osqp.OSQP()
+        optimizer.setup(P=sparse.csc_matrix(P), q=q, A=sparse.csc_matrix(A), l=l, u=u, verbose=False, eps_abs=1e-6, eps_rel=1e-6)
+        sol = optimizer.solve()
+
+        solved = (sol.info.status == 'solved')
+
+        u_opt = sol.x[-nu*N:]
+        x_opt = sol.x[:nx*(N+1)]
+
+        horizon_x = x_opt[::nx]
+        horizon_y = x_opt[1::nx]
+        horizon_vel = x_opt[2::nx]
+        horizon_yaw = x_opt[3::nx]
+        horizon_accel = u_opt[::nu]
+        horizon_steer = u_opt[1::nu]
+
+        return horizon_x, horizon_y, horizon_vel, horizon_yaw, horizon_accel, horizon_steer, solved
+    
+    # def _control(self, reference_state, predicted_state, reference_steer):
+    #     """
+    #     Solve the MPC control problem.
+
+    #     :param reference_state: np.array of reference states
+    #     :param predicted_state: np.array of predicted states obtained using
+    #         propogated controls
+    #     :param reference_steer: np.array of reference steering
+    #     :return:
+    #     """
+    #     # intialize problem
+    #     x = cvxpy.Variable((self.num_state, self.config['horizon'] + 1))
+    #     u = cvxpy.Variable((self.num_input, self.config['horizon']))
+    #     cost = constants.Constant(0.0)
+    #     constraints = []
+
+    #     # iterate over the horizon
+    #     for t in range(self.config['horizon']):
+    #         cost += cvxpy.quad_form(u[:, t], self.config['R'])
+
+    #         if t != 0:
+    #             cost += cvxpy.quad_form(reference_state[:, t] - x[:, t],
+    #                                     self.config['Q'])
+
+    #         matrix_a, matrix_b, matrix_c = self._linearized_model_matrix(
+    #             predicted_state[2, t], predicted_state[3, t],
+    #             reference_steer[0, t])
+    #         constraints += [
+    #             x[:,
+    #               t + 1] == matrix_a @ x[:, t] + matrix_b @ u[:, t] + matrix_c
+    #         ]
+
+    #         if t < (self.config['horizon'] - 1):
+    #             cost += cvxpy.quad_form(u[:, t + 1] - u[:, t],
+    #                                     self.config['Rd'])
+    #             constraints += [
+    #                 cvxpy.abs(u[1, t + 1] - u[1, t]) <=
+    #                 self.vehicle.config['max_steer_speed'] * self.delta_t
+    #             ]
+
+    #     # set the cost
+    #     cost += cvxpy.quad_form(
+    #         reference_state[:, self.config['horizon']] -
+    #         x[:, self.config['horizon']], self.config['Qf'])
+
+    #     # set the constraints
+    #     constraints += [x[:, 0] == self.vehicle.get_state()]
+    #     constraints += [x[2, :] <= self.vehicle.config['max_vel']]
+    #     constraints += [x[2, :] >= self.vehicle.config['min_vel']]
+    #     constraints += [u[0, :] <= self.vehicle.config['max_accel']]
+    #     constraints += [u[0, :] >= self.vehicle.config['min_accel']]
+    #     constraints += [u[1, :] <= self.vehicle.config['max_steer']]
+    #     constraints += [u[1, :] >= self.vehicle.config['min_steer']]
+
+    #     # solve the problem
+    #     prob = cvxpy.Problem(cvxpy.Minimize(cost), constraints)
+    #     prob.solve(solver=cvxpy.OSQP, verbose=False, warm_start=True)
+
+    #     # keep track of optimality
+    #     solved = False
+    #     if prob.status == cvxpy.OPTIMAL or \
+    #             prob.status == cvxpy.OPTIMAL_INACCURATE:
+    #         solved = True
+
+    #     # return solution
+    #     horizon_x = np.array(x.value[0, :]).flatten()
+    #     horizon_y = np.array(x.value[1, :]).flatten()
+    #     horizon_vel = np.array(x.value[2, :]).flatten()
+    #     horizon_yaw = np.array(x.value[3, :]).flatten()
+    #     horizon_accel = np.array(u.value[0, :]).flatten()
+    #     horizon_steer = np.array(u.value[1, :]).flatten()
+
+    #     return horizon_x, horizon_y, horizon_vel, horizon_yaw, horizon_accel, \
+    #         horizon_steer, solved
 
     def _linearized_model_matrix(self, vel, yaw, steer):
         """

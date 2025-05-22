@@ -1,0 +1,59 @@
+import os
+import re
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# === CONFIG ===
+LOG_DIR = "results"
+FILE_PATTERN = r"main_client_(\d+)_clients\.csv"
+
+# === AGGREGATION ===
+summary_stats = []
+
+for fname in os.listdir(LOG_DIR):
+    match = re.match(FILE_PATTERN, fname)
+    if not match:
+        continue
+    
+    n_clients = int(match.group(1))
+    file_path = os.path.join(LOG_DIR, fname)
+    df = pd.read_csv(file_path)
+    
+    latencies = df["detection_time_sec"]
+    summary_stats.append({
+        "extra_clients": n_clients,
+        "min": latencies.min(),
+        "max": latencies.max(),
+        "avg": latencies.mean(),
+        "p10": latencies.quantile(0.10),
+        "p50": latencies.quantile(0.50),
+        "p90": latencies.quantile(0.90),
+        "p99": latencies.quantile(0.99)
+    })
+
+# === TO DATAFRAME ===
+summary_df = pd.DataFrame(summary_stats).sort_values("extra_clients")
+summary_csv = os.path.join(LOG_DIR, "latency_summary.csv")
+summary_df.to_csv(summary_csv, index=False)
+print(f"[INFO] Saved latency summary to: {summary_csv}")
+print(summary_df)
+
+# === PLOTTING ===
+plt.figure(figsize=(10, 6))
+sns.lineplot(data=summary_df, x="extra_clients", y="avg", label="Avg")
+sns.lineplot(data=summary_df, x="extra_clients", y="p50", label="P50")
+sns.lineplot(data=summary_df, x="extra_clients", y="p90", label="P90")
+sns.lineplot(data=summary_df, x="extra_clients", y="p99", label="P99")
+
+plt.title("Latency vs Number of Extra Clients")
+plt.xlabel("Number of Extra Clients")
+plt.ylabel("Latency (seconds)")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+
+plot_path = os.path.join(LOG_DIR, "latency_vs_clients.png")
+plt.savefig(plot_path)
+print(f"[INFO] Saved plot to: {plot_path}")
+plt.show()
