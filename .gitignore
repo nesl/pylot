@@ -6,6 +6,17 @@
 *.dot
 dependencies/
 pylot/prediction/prediction/
+*.pt
+*.csv
+*.onnx
+*.engine
+*.txt
+*.png
+*.pkl
+*.jpg
+*.jpeg
+*.qdrep
+*.qdstrm
 
 # Generated documentation files
 /doc/build
