@@ -11,12 +11,12 @@ from utils.service import send_msg, recv_msg
 
 localhost = '0.0.0.0'
 rpi = '10.0.0.4'
-jetson = '10.0.0.6'
+jetson = '10.0.0.4'
 
 class CameraMonitorPipeline:
-    def __init__(self, client, world, server_host=localhost, server_port=10000):
+    #def __init__(self, client, world, server_host=localhost, server_port=10000):
     #def __init__(self, client, world, server_host=rpi, server_port=10000):
-    #def __init__(self, client, world, server_host=jetson, server_port=10000):
+    def __init__(self, client, world, server_host=jetson, server_port=10000):
         self.world = world
         self.visualizer = Visualizer(world)
         self.rgb_camera, self.depth_camera = self.spawn_cameras()
