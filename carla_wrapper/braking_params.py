@@ -40,7 +40,7 @@ experiment_matrix = [
 ]
 
 # -- Index of active experiment --
-active_index = 9
+active_index = 0
 active_rep = 1
 
 # -- Active experiment configuration --
